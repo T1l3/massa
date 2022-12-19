@@ -53,9 +53,9 @@ pub struct NetworkWorker {
     /// Running handshakes that send a list of peers.
     handshake_peer_list_futures: FuturesUnordered<JoinHandle<()>>,
     /// Receiving channel for node events.
-    node_event_rx: mpsc::Receiver<NodeEvent>,
+    node_event_rx: Receiver<NodeEvent>,
     /// Ids of active nodes mapped to Connection id, node command sender and handle on the associated node worker.
-    pub(crate) active_nodes: HashMap<NodeId, (ConnectionId, mpsc::Sender<NodeCommand>)>,
+    pub(crate) active_nodes: HashMap<NodeId, (ConnectionId, Sender<NodeCommand>)>,
     /// Node worker handles
     node_worker_handles:
         FuturesUnordered<JoinHandle<(NodeId, Result<ConnectionClosureReason, NetworkError>)>>,
@@ -100,8 +100,7 @@ impl NetworkWorker {
     ) -> NetworkWorker {
         let self_node_id = NodeId(keypair.get_public_key());
 
-        let (node_event_tx, node_event_rx) =
-            mpsc::channel::<NodeEvent>(cfg.node_event_channel_size);
+        let (node_event_tx, node_event_rx) = bounded::<NodeEvent>(cfg.node_event_channel_size);
         let max_wait_event = cfg.max_send_wait_network_event.to_duration();
         NetworkWorker {
             cfg,
@@ -248,11 +247,11 @@ impl NetworkWorker {
 
                         // spawn node_controller_fn
                         let (node_command_tx, node_command_rx) =
-                            mpsc::channel::<NodeCommand>(self.cfg.node_command_channel_size);
+                            bounded::<NodeCommand>(self.cfg.node_command_channel_size);
                         let node_event_tx_clone = self.event.clone_node_sender();
                         let cfg_copy = self.cfg.clone();
                         let node_worker_command_tx = node_command_tx.clone();
-                        let node_fn_handle = tokio::spawn(async move {
+                        let node_fn_handle = thread::spawn(move || {
                             let res = NodeWorker::new(
                                 cfg_copy,
                                 new_node_id,
@@ -262,8 +261,7 @@ impl NetworkWorker {
                                 node_command_rx,
                                 node_event_tx_clone,
                             )
-                            .run_loop()
-                            .await;
+                            .run_loop();
                             (new_node_id, res)
                         });
                         entry.insert((new_connection_id, node_command_tx.clone()));

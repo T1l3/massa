@@ -324,13 +324,6 @@ pub fn on_send_operation_batches_cmd(
         "network_worker.manage_network_command receive NetworkCommand::SendOperationAnnouncements",
         { "batch": batch }
     );
-    let mut futs = FuturesUnordered::new();
-    let fut = worker.event.forward(
-        to_node,
-        worker.active_nodes.get(&to_node),
-        NodeCommand::SendOperationAnnouncements(batch),
-    );
-    futs.push(fut);
 }
 
 /// Network worker received the command `NetworkCommand::AskForOperations` from

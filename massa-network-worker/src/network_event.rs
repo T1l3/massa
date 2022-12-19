@@ -9,7 +9,7 @@ pub struct EventSender {
     /// Sender for network events
     controller_event_tx: Sender<NetworkEvent>,
     /// Channel for sending node events.
-    node_event_tx: mpsc::Sender<NodeEvent>,
+    node_event_tx: Sender<NodeEvent>,
     /// Max time spend to wait
     max_send_wait: Duration,
 }
@@ -17,7 +17,7 @@ pub struct EventSender {
 impl EventSender {
     pub fn new(
         controller_event_tx: Sender<NetworkEvent>,
-        node_event_tx: mpsc::Sender<NodeEvent>,
+        node_event_tx: Sender<NodeEvent>,
         max_send_wait: Duration,
     ) -> Self {
         Self {
@@ -50,11 +50,11 @@ impl EventSender {
     pub async fn forward(
         &self,
         node_id: NodeId,
-        node: Option<&(ConnectionId, mpsc::Sender<NodeCommand>)>,
+        node: Option<&(ConnectionId, Sender<NodeCommand>)>,
         message: NodeCommand,
     ) {
         if let Some((_, node_command_tx)) = node {
-            if node_command_tx.send(message).await.is_err() {
+            if node_command_tx.send(message).is_err() {
                 debug!(
                     "{}",
                     NetworkError::ChannelError("contact with node worker lost while trying to send it a message. Probably a peer disconnect.".into())
@@ -67,7 +67,7 @@ impl EventSender {
         }
     }
 
-    pub fn clone_node_sender(&self) -> mpsc::Sender<NodeEvent> {
+    pub fn clone_node_sender(&self) -> Sender<NodeEvent> {
         self.node_event_tx.clone()
     }
 
@@ -170,10 +170,10 @@ pub mod event_impl {
         massa_trace!("node_asked_peer_list", { "node_id": from });
         let peer_list = worker.peer_info_db.get_advertisable_peer_ips();
         if let Some((_, node_command_tx)) = worker.active_nodes.get(&from) {
-            let res = node_command_tx
+            if node_command_tx
                 .send(NodeCommand::SendPeerList(peer_list))
-                .await;
-            if res.is_err() {
+                .is_err()
+            {
                 debug!(
                     "{}",
                     NetworkError::ChannelError("node command send send_peer_list failed".into(),)
