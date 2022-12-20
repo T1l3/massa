@@ -352,7 +352,7 @@ async fn launch(
         start_pool_controller(pool_config, &shared_storage, execution_controller.clone());
 
     let (protocol_command_sender, protocol_command_receiver) =
-        mpsc::channel::<ProtocolCommand>(PROTOCOL_CONTROLLER_CHANNEL_SIZE);
+        crossbeam_channel::bounded::<ProtocolCommand>(PROTOCOL_CONTROLLER_CHANNEL_SIZE);
 
     let consensus_config = ConsensusConfig {
         genesis_timestamp: *GENESIS_TIMESTAMP,
@@ -437,7 +437,6 @@ async fn launch(
         pool_controller.clone(),
         shared_storage.clone(),
     )
-    .await
     .expect("could not start protocol controller");
 
     // launch factory
