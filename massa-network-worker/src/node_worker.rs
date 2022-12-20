@@ -71,6 +71,103 @@ impl NodeWorker {
         }
     }
 
+    /// Send a node event upstream.
+    fn send_node_event(&self, event: NodeEvent) {
+        let result = self
+            .node_event_tx
+            .send_timeout(event, self.cfg.max_send_wait_node_event.to_duration());
+        match result {
+            Ok(()) => {}
+            Err(SendTimeoutError::Disconnected(event)) => {
+                warn!(
+                    "Failed to send NodeEvent due to channel closure: {:?}.",
+                    event
+                );
+            }
+            Err(SendTimeoutError::Timeout(event)) => {
+                warn!("Failed to send NodeEvent due to timeout: {:?}.", event);
+            }
+        }
+    }
+
+    /// Handle an incoming message from the node.
+    fn handle_message(mut self, msg: Message) -> Result<(), NetworkError> {
+        match msg {
+            Message::BlockHeader(header) => {
+                massa_trace!(
+                    "node_worker.run_loop. receive Message::BlockHeader",
+                    {"block_id": header.id.get_hash(), "header": header, "node": self.node_id}
+                );
+                let event = NodeEvent(self.node_id, NodeEventType::ReceivedBlockHeader(header));
+                self.send_node_event(event);
+            }
+            Message::AskForBlocks(list) => {
+                massa_trace!("node_worker.run_loop. receive Message::AskForBlocks", {"hashlist": list, "node": self.node_id});
+                let event = NodeEvent(self.node_id, NodeEventType::ReceivedAskForBlocks(list));
+                self.send_node_event(event);
+            }
+            Message::ReplyForBlocks(list) => {
+                massa_trace!("node_worker.run_loop. receive Message::AskForBlocks", {"hashlist": list, "node": self.node_id});
+                let event = NodeEvent(self.node_id, NodeEventType::ReceivedReplyForBlocks(list));
+                self.send_node_event(event);
+            }
+            Message::PeerList(pl) => {
+                massa_trace!("node_worker.run_loop. receive Message::PeerList", {"peerlist": pl, "node": self.node_id});
+                let event = NodeEvent(self.node_id, NodeEventType::ReceivedPeerList(pl));
+                self.send_node_event(event);
+            }
+            Message::AskPeerList => {
+                let event = NodeEvent(self.node_id, NodeEventType::AskedPeerList);
+                self.send_node_event(event);
+            }
+            Message::Operations(operations) => {
+                massa_trace!(
+                    "node_worker.run_loop. receive Message::Operations: ",
+                    {"node": self.node_id, "operations": operations}
+                );
+                //massa_trace!("node_worker.run_loop. receive Message::Operations", {"node": self.node_id, "operations": operations});
+                let event = NodeEvent(self.node_id, NodeEventType::ReceivedOperations(operations));
+                self.send_node_event(event);
+            }
+            Message::AskForOperations(operation_prefix_ids) => {
+                massa_trace!(
+                    "node_worker.run_loop. receive Message::AskForOperations: ",
+                    {"node": self.node_id, "operation_ids": operation_prefix_ids}
+                );
+                //massa_trace!("node_worker.run_loop. receive Message::AskForOperations", {"node": self.node_id, "operations": operation_ids});
+                let event = NodeEvent(
+                    self.node_id,
+                    NodeEventType::ReceivedAskForOperations(operation_prefix_ids),
+                );
+                self.send_node_event(event);
+            }
+            Message::OperationsAnnouncement(operation_prefix_ids) => {
+                massa_trace!("node_worker.run_loop. receive Message::OperationsBatch", {"node": self.node_id, "operation_prefix_ids": operation_prefix_ids});
+                let event = NodeEvent(
+                    self.node_id,
+                    NodeEventType::ReceivedOperationAnnouncements(operation_prefix_ids),
+                );
+                self.send_node_event(event);
+            }
+            Message::Endorsements(endorsements) => {
+                massa_trace!("node_worker.run_loop. receive Message::Endorsement", {"node": self.node_id, "endorsements": endorsements});
+                let event = NodeEvent(
+                    self.node_id,
+                    NodeEventType::ReceivedEndorsements(endorsements),
+                );
+                self.send_node_event(event);
+            }
+            _ => {
+                // TODO: Write a more user-friendly warning/logout after several consecutive fails? see #1082
+                massa_trace!(
+                    "node_worker.run_loop.self.socket_reader.next(). Unexpected message Warning",
+                    {}
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// node event loop. Consumes self.
     pub fn run_loop(mut self) -> Result<ConnectionClosureReason, NetworkError> {
         let mut socket_writer = self.socket_writer_opt.take().ok_or_else(|| {
@@ -79,12 +176,14 @@ impl NodeWorker {
             )
         })?;
 
+        let (message_tx, message_rx) = bounded::<Message>(self.cfg.node_command_channel_size); // TODO: config
         let node_reader_handle = tokio::spawn(async move {
             node_reader_handle(
                 &mut self.socket_reader,
                 &mut self.node_event_tx,
                 self.node_id,
                 self.cfg.max_send_wait_node_event,
+                message_tx,
             )
             .await
         });
@@ -282,6 +381,7 @@ async fn node_reader_handle(
     node_event_tx: &mut Sender<NodeEvent>,
     node_id: NodeId,
     max_send_wait: MassaTime,
+    message_chan: Sender<Message>,
 ) -> ConnectionClosureReason {
     let mut exit_reason = ConnectionClosureReason::Normal;
 
@@ -291,75 +391,15 @@ async fn node_reader_handle(
                 massa_trace!("node_worker.run_loop. receive self.socket_reader.next()", {
                     "index": index
                 });
-                match msg {
-                    Message::BlockHeader(header) => {
-                        massa_trace!(
-                            "node_worker.run_loop. receive Message::BlockHeader",
-                            {"block_id": header.id.get_hash(), "header": header, "node": node_id}
-                        );
-                        let event = NodeEvent(node_id, NodeEventType::ReceivedBlockHeader(header));
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::AskForBlocks(list) => {
-                        massa_trace!("node_worker.run_loop. receive Message::AskForBlocks", {"hashlist": list, "node": node_id});
-                        let event = NodeEvent(node_id, NodeEventType::ReceivedAskForBlocks(list));
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::ReplyForBlocks(list) => {
-                        massa_trace!("node_worker.run_loop. receive Message::AskForBlocks", {"hashlist": list, "node": node_id});
-                        let event = NodeEvent(node_id, NodeEventType::ReceivedReplyForBlocks(list));
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::PeerList(pl) => {
-                        massa_trace!("node_worker.run_loop. receive Message::PeerList", {"peerlist": pl, "node": node_id});
-                        let event = NodeEvent(node_id, NodeEventType::ReceivedPeerList(pl));
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::AskPeerList => {
-                        let event = NodeEvent(node_id, NodeEventType::AskedPeerList);
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::Operations(operations) => {
-                        massa_trace!(
-                            "node_worker.run_loop. receive Message::Operations: ",
-                            {"node": node_id, "operations": operations}
-                        );
-                        //massa_trace!("node_worker.run_loop. receive Message::Operations", {"node": self.node_id, "operations": operations});
-                        let event =
-                            NodeEvent(node_id, NodeEventType::ReceivedOperations(operations));
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::AskForOperations(operation_prefix_ids) => {
-                        massa_trace!(
-                            "node_worker.run_loop. receive Message::AskForOperations: ",
-                            {"node": node_id, "operation_ids": operation_prefix_ids}
-                        );
-                        //massa_trace!("node_worker.run_loop. receive Message::AskForOperations", {"node": self.node_id, "operations": operation_ids});
-                        let event = NodeEvent(
-                            node_id,
-                            NodeEventType::ReceivedAskForOperations(operation_prefix_ids),
-                        );
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::OperationsAnnouncement(operation_prefix_ids) => {
-                        massa_trace!("node_worker.run_loop. receive Message::OperationsBatch", {"node": node_id, "operation_prefix_ids": operation_prefix_ids});
-                        let event = NodeEvent(
-                            node_id,
-                            NodeEventType::ReceivedOperationAnnouncements(operation_prefix_ids),
-                        );
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    Message::Endorsements(endorsements) => {
-                        massa_trace!("node_worker.run_loop. receive Message::Endorsement", {"node": node_id, "endorsements": endorsements});
-                        let event =
-                            NodeEvent(node_id, NodeEventType::ReceivedEndorsements(endorsements));
-                        send_node_event(node_event_tx, event, max_send_wait).await
-                    }
-                    _ => {
-                        // TODO: Write a more user-friendly warning/logout after several consecutive fails? see #1082
-                        massa_trace!("node_worker.run_loop.self.socket_reader.next(). Unexpected message Warning", {});
-                    }
-                }
+                let chan_clone = message_chan.clone();
+                Handle::current()
+                    .spawn_blocking(move || {
+                        chan_clone
+                            .send(msg)
+                            .expect("Failed to send node message to node worker.");
+                    })
+                    .await
+                    .expect("Failed to run task to send node message to node worker.");
             }
             Ok(None) => {
                 massa_trace!(
@@ -381,26 +421,4 @@ async fn node_reader_handle(
     }
 
     exit_reason
-}
-
-/// Send a node event
-// via node_event_tx queue - used by 'node_reader_handle'
-async fn send_node_event(
-    node_event_tx: &mut Sender<NodeEvent>,
-    event: NodeEvent,
-    max_send_wait: MassaTime,
-) {
-    let result = node_event_tx.send_timeout(event, max_send_wait.to_duration());
-    match result {
-        Ok(()) => {}
-        Err(SendTimeoutError::Disconnected(event)) => {
-            warn!(
-                "Failed to send NodeEvent due to channel closure: {:?}.",
-                event
-            );
-        }
-        Err(SendTimeoutError::Timeout(event)) => {
-            warn!("Failed to send NodeEvent due to timeout: {:?}.", event);
-        }
-    }
 }
