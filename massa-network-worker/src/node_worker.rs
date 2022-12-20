@@ -12,7 +12,8 @@ use massa_network_exports::{
     ConnectionClosureReason, NetworkConfig, NetworkError, NodeCommand, NodeEvent, NodeEventType,
 };
 use massa_time::MassaTime;
-use tokio::{sync::mpsc, time::timeout};
+use tokio::runtime::Handle;
+use tokio::{sync::mpsc, task, time::timeout};
 use tracing::{debug, trace, warn};
 
 /// Manages connections
@@ -32,6 +33,9 @@ pub struct NodeWorker {
     node_command_rx: Receiver<NodeCommand>,
     /// Channel to send node events.
     node_event_tx: Sender<NodeEvent>,
+    /// Handle to the networking runtime.
+    /// TODO: move to read/write binders.
+    runtime_handle: Handle,
 }
 
 impl NodeWorker {
@@ -53,6 +57,7 @@ impl NodeWorker {
         node_command_tx: Sender<NodeCommand>,
         node_command_rx: Receiver<NodeCommand>,
         node_event_tx: Sender<NodeEvent>,
+        runtime_handle: Handle,
     ) -> NodeWorker {
         NodeWorker {
             cfg,
@@ -62,6 +67,7 @@ impl NodeWorker {
             node_command_tx,
             node_command_rx,
             node_event_tx,
+            runtime_handle,
         }
     }
 
@@ -109,6 +115,7 @@ impl NodeWorker {
                         self.cfg.max_ask_blocks,
                         self.cfg.max_operations_per_message,
                         self.cfg.max_endorsements_per_message,
+                        &self.runtime_handle,
                     );
                 }
                 recv(ask_peer_list_interval) -> _ => {
@@ -148,6 +155,7 @@ fn node_writer_handle(
     max_ask_blocks: u32,
     max_operations_per_message: u32,
     max_endorsements_per_message: u32,
+    runtime_handle: &Handle,
 ) -> ConnectionClosureReason {
     let mut exit_reason = ConnectionClosureReason::Normal;
     let messages_: Option<Vec<Message>> = match node_command {
@@ -238,7 +246,31 @@ fn node_writer_handle(
     // safe to unwrap here
     let messages = messages_.unwrap();
 
-    for msg in messages.iter() {}
+    for msg in messages.iter() {
+        let res = runtime_handle.block_on(async {
+            timeout(write_timeout.to_duration(), socket_writer.send(msg)).await
+        });
+        match res {
+            Err(err) => {
+                massa_trace!("node_worker.run_loop.loop.writer_command_rx.recv.send.timeout", {
+                    "node": node_id,
+                });
+                debug!("Node data writing timed out: {}", err);
+                return ConnectionClosureReason::Failed;
+            }
+            Ok(Err(err)) => {
+                massa_trace!("node_worker.run_loop.loop.writer_command_rx.recv.send.error", {
+                    "node": node_id, "err":  format!("{}", err),
+                });
+                debug!("Node data writing error: {:?}", err);
+                return ConnectionClosureReason::Failed;
+            }
+            Ok(Ok(id)) => {
+                massa_trace!("node_worker.run_loop.loop.writer_command_rx.recv.send.ok", {
+                                "node": node_id, "msg_id": id});
+            }
+        }
+    }
 
     exit_reason
 }

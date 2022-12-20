@@ -25,6 +25,7 @@ use std::{
     collections::{hash_map, HashMap, HashSet},
     net::{IpAddr, SocketAddr},
 };
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
@@ -65,6 +66,8 @@ pub struct NetworkWorker {
     version: Version,
     /// Event sender
     pub(crate) event: EventSender,
+    /// Tokio runtime.
+    runtime: Runtime,
 }
 
 pub struct NetworkWorkerChannels {
@@ -120,6 +123,7 @@ impl NetworkWorker {
             node_worker_handles: FuturesUnordered::new(),
             active_connections: HashMap::new(),
             version,
+            runtime: Runtime::new().expect("Failed to initialize networking runtime."),
         }
     }
 
@@ -251,6 +255,7 @@ impl NetworkWorker {
                         let node_event_tx_clone = self.event.clone_node_sender();
                         let cfg_copy = self.cfg.clone();
                         let node_worker_command_tx = node_command_tx.clone();
+                        let runtime_handle = self.runtime.handle().clone();
                         let node_fn_handle = thread::spawn(move || {
                             let res = NodeWorker::new(
                                 cfg_copy,
@@ -260,6 +265,7 @@ impl NetworkWorker {
                                 node_worker_command_tx,
                                 node_command_rx,
                                 node_event_tx_clone,
+                                runtime_handle,
                             )
                             .run_loop();
                             (new_node_id, res)
