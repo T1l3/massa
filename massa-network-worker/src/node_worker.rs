@@ -177,7 +177,7 @@ impl NodeWorker {
         })?;
 
         let (message_tx, message_rx) = bounded::<Message>(self.cfg.node_command_channel_size); // TODO: config
-        let node_reader_handle = tokio::spawn(async move {
+        let node_reader_handle = self.runtime_handle.spawn(async move {
             node_reader_handle(
                 &mut self.socket_reader,
                 &mut self.node_event_tx,
