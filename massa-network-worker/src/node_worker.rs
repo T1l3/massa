@@ -23,8 +23,8 @@ pub struct NodeWorker {
     cfg: NetworkConfig,
     /// Node id associated to that worker.
     node_id: NodeId,
-    /// Reader for incoming data.
-    socket_reader: ReadBinder,
+    /// Optional reader for incoming data.
+    socket_reader_opt: Option<ReadBinder>,
     /// Optional writer to send data.
     socket_writer_opt: Option<WriteBinder>,
     /// Channel to send node commands.
@@ -62,7 +62,7 @@ impl NodeWorker {
         NodeWorker {
             cfg,
             node_id,
-            socket_reader,
+            socket_reader_opt: Some(socket_reader),
             socket_writer_opt: Some(socket_writer),
             node_command_tx,
             node_command_rx,
@@ -91,7 +91,7 @@ impl NodeWorker {
     }
 
     /// Handle an incoming message from the node.
-    fn handle_message(mut self, msg: Message) -> Result<(), NetworkError> {
+    fn handle_message(&self, msg: Message) -> Result<(), NetworkError> {
         match msg {
             Message::BlockHeader(header) => {
                 massa_trace!(
@@ -175,12 +175,18 @@ impl NodeWorker {
                 "NodeWorker call run_loop more than once".to_string(),
             )
         })?;
+        let mut socket_reader = self.socket_reader_opt.take().ok_or_else(|| {
+            NetworkError::GeneralProtocolError(
+                "NodeWorker call run_loop more than once(2)".to_string(),
+            )
+        })?;
 
         let (message_tx, message_rx) = bounded::<Message>(self.cfg.node_command_channel_size); // TODO: config
+        let mut node_event_tx = self.node_event_tx.clone();
         let node_reader_handle = self.runtime_handle.spawn(async move {
             node_reader_handle(
-                &mut self.socket_reader,
-                &mut self.node_event_tx,
+                &mut socket_reader,
+                &mut node_event_tx,
                 self.node_id,
                 self.cfg.max_send_wait_node_event,
                 message_tx,
@@ -194,7 +200,7 @@ impl NodeWorker {
         let mut exit_reason = ConnectionClosureReason::Normal;
         let mut _exit_reason_reader = ConnectionClosureReason::Normal;
 
-        'select_loop: loop {
+        loop {
             /*
                 select! without the "biased" modifier will randomly select the 1st branch to check,
                 then will check the next ones in the order they are written.
@@ -205,6 +211,15 @@ impl NodeWorker {
                     * ask peers: low frequency, non-critical
             */
             select! {
+                recv(message_rx) -> msg => {
+                    match msg {
+                        Ok(msg) => self.handle_message(msg)?,
+                        Err(_) => {
+                            exit_reason = ConnectionClosureReason::Failed;
+                            break
+                        }
+                     }
+                }
                 recv(self.node_command_rx) -> cmd => {
                     node_writer_handle(
                         &mut socket_writer,
@@ -223,7 +238,7 @@ impl NodeWorker {
                     massa_trace!("node_worker.run_loop.select.timer send Message::AskPeerList", {"node": self.node_id});
                     if let Err(e) = self.node_command_tx.send(NodeCommand::AskPeerList) {
                         debug!("Node worker {}: unable to send ask peer list: {}", self.node_id, e);
-                        break 'select_loop;
+                        break;
                     }
 
                     trace!("after sending Message::AskPeerList from writer_command_tx in node_worker run_loop");
