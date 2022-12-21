@@ -201,15 +201,7 @@ impl NodeWorker {
         let mut _exit_reason_reader = ConnectionClosureReason::Normal;
 
         loop {
-            /*
-                select! without the "biased" modifier will randomly select the 1st branch to check,
-                then will check the next ones in the order they are written.
-                We choose this order:
-                    * incoming socket data (high frequency): forward incoming data in priority to avoid contention
-                    * node commands (high frequency): try to send, fail on contention
-                    * ask peers: low frequency, non-critical
-            */
-            select! {
+            let cmd = select! {
                 recv(message_rx) -> msg => {
                     match msg {
                         Ok(msg) => self.handle_message(msg)?,
@@ -218,33 +210,28 @@ impl NodeWorker {
                             break
                         }
                      }
+                     continue;
                 }
-                recv(self.node_command_rx) -> cmd => {
-                    if let Err(err) = node_writer_handle(
-                        &mut socket_writer,
-                        cmd.ok(),
-                        self.cfg.message_timeout,
-                        self.node_id,
-                        self.cfg.max_ask_blocks,
-                        self.cfg.max_operations_per_message,
-                        self.cfg.max_endorsements_per_message,
-                        &self.runtime_handle,
-                        ) {
-                            exit_reason = err;
-                            break
-                        }
-                }
+                recv(self.node_command_rx) -> cmd => cmd,
                 recv(ask_peer_list_interval) -> _ => {
                     debug!("timer-based asking node_id={} for peer list", self.node_id);
                     massa_trace!("node_worker.run_loop. timer_ask_peer_list", {"node_id": self.node_id});
                     massa_trace!("node_worker.run_loop.select.timer send Message::AskPeerList", {"node": self.node_id});
-                    if let Err(e) = self.node_command_tx.send(NodeCommand::AskPeerList) {
-                        debug!("Node worker {}: unable to send ask peer list: {}", self.node_id, e);
-                        break;
-                    }
-
-                    trace!("after sending Message::AskPeerList from writer_command_tx in node_worker run_loop");
+                    Ok(NodeCommand::AskPeerList)
                 }
+            };
+            if let Err(err) = node_writer_handle(
+                &mut socket_writer,
+                cmd.ok(),
+                self.cfg.message_timeout,
+                self.node_id,
+                self.cfg.max_ask_blocks,
+                self.cfg.max_operations_per_message,
+                self.cfg.max_endorsements_per_message,
+                &self.runtime_handle,
+            ) {
+                exit_reason = err;
+                break;
             }
         }
 
