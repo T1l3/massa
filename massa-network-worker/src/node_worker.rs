@@ -220,7 +220,7 @@ impl NodeWorker {
                      }
                 }
                 recv(self.node_command_rx) -> cmd => {
-                    node_writer_handle(
+                    if let Err(err) = node_writer_handle(
                         &mut socket_writer,
                         cmd.ok(),
                         self.cfg.message_timeout,
@@ -229,7 +229,10 @@ impl NodeWorker {
                         self.cfg.max_operations_per_message,
                         self.cfg.max_endorsements_per_message,
                         &self.runtime_handle,
-                    );
+                        ) {
+                            exit_reason = err;
+                            break
+                        }
                 }
                 recv(ask_peer_list_interval) -> _ => {
                     debug!("timer-based asking node_id={} for peer list", self.node_id);
@@ -269,12 +272,11 @@ fn node_writer_handle(
     max_operations_per_message: u32,
     max_endorsements_per_message: u32,
     runtime_handle: &Handle,
-) -> ConnectionClosureReason {
+) -> Result<(), ConnectionClosureReason> {
     let mut exit_reason = ConnectionClosureReason::Normal;
     let messages_: Option<Vec<Message>> = match node_command {
         Some(NodeCommand::Close(r)) => {
-            exit_reason = r;
-            None
+            return Err(r);
         }
         Some(NodeCommand::SendPeerList(ip_vec)) => {
             massa_trace!("node_worker.run_loop. send Message::PeerList", {"peerlist": ip_vec, "node": node_id});
@@ -349,13 +351,10 @@ fn node_writer_handle(
             // Note: this should never happen,
             // since it implies the network worker dropped its node command sender
             // before having shut-down the node and joined on its handle.
-            return ConnectionClosureReason::Failed;
+            return Err(ConnectionClosureReason::Failed);
         }
     };
 
-    if messages_.is_none() {
-        return exit_reason;
-    }
     // safe to unwrap here
     let messages = messages_.unwrap();
 
@@ -369,14 +368,14 @@ fn node_writer_handle(
                     "node": node_id,
                 });
                 debug!("Node data writing timed out: {}", err);
-                return ConnectionClosureReason::Failed;
+                return Err(ConnectionClosureReason::Failed);
             }
             Ok(Err(err)) => {
                 massa_trace!("node_worker.run_loop.loop.writer_command_rx.recv.send.error", {
                     "node": node_id, "err":  format!("{}", err),
                 });
                 debug!("Node data writing error: {:?}", err);
-                return ConnectionClosureReason::Failed;
+                return Err(ConnectionClosureReason::Failed);
             }
             Ok(Ok(id)) => {
                 massa_trace!("node_worker.run_loop.loop.writer_command_rx.recv.send.ok", {
@@ -384,8 +383,7 @@ fn node_writer_handle(
             }
         }
     }
-
-    exit_reason
+    Ok(())
 }
 
 /// Handle socket read function until a message is received then send it
