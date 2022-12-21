@@ -138,19 +138,7 @@ impl NetworkWorker {
             if need_connect_retry {
                 need_connect_retry = false;
             }
-
-            /*
-                select! without the "biased" modifier will randomly select the 1st branch to check,
-                then will check the next ones in the order they are written.
-                We choose this order:
-                    * manager commands to avoid waiting too long to stop in case of contention
-                    * node events (HIGH FREQUENCY): we want to process incoming events in priority to know best about the network and empty buffers quickly
-                    * incoming commands (HIGH FREQUENCY): we want to TRY to send data to the target, but don't wait if the buffers are full
-                    * cleanup tick (less important, low freq)
-                    * node closed (no worries if processed a bit late)
-                    * out connecting events (no problem if a bit late)
-                    * listener event (HIGH FREQUENCY) non-critical
-            */
+            
             select! {
                 // listen to manager commands
                 recv(self.controller_manager_rx) -> cmd => {
