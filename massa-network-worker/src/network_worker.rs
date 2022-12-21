@@ -25,7 +25,7 @@ use std::{
     collections::{hash_map, HashMap, HashSet},
     net::{IpAddr, SocketAddr},
 };
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
@@ -133,12 +133,47 @@ impl NetworkWorker {
         // wake up the controller at a regular interval to retry connections
         let mut wakeup_interval = tick(self.cfg.wakeup_interval.to_duration());
         let mut need_connect_retry = true;
+        let mut out_connection_handle = None;
+        let (out_connection_tx, out_connection_rx) = bounded::<(
+            tokio::io::Result<(ReadHalf, WriteHalf)>,
+            IpAddr,
+        )>(self.cfg.node_command_channel_size); // TODO: config
+        let mut cur_connection_id = ConnectionId::default();
 
         loop {
             if need_connect_retry {
-                need_connect_retry = false;
+                // try to connect to candidate IPs
+                let mut out_connecting_futures = FuturesUnordered::new();
+                let candidate_ips = self.peer_info_db.get_out_connection_candidate_ips()?;
+                for ip in candidate_ips {
+                    debug!("starting outgoing connection attempt towards ip={}", ip);
+                    massa_trace!("out_connection_attempt_start", { "ip": ip });
+                    self.peer_info_db.new_out_connection_attempt(&ip)?;
+                    let mut connector = self.establisher.get_connector(self.cfg.connect_timeout)?;
+                    let addr = SocketAddr::new(ip, self.cfg.protocol_port);
+                    out_connecting_futures.push(async move {
+                        match connector.connect(addr).await {
+                            Ok((reader, writer)) => (addr.ip(), Ok((reader, writer))),
+                            Err(e) => (addr.ip(), Err(e)),
+                        }
+                    });
+                }
+                let out_connection_tx_clone = out_connection_tx.clone();
+                out_connection_handle = Some(self.runtime.spawn(async move {
+                    while let Some((ip_addr, res)) = out_connecting_futures.next().await {
+                        let out_connection_tx_clone = out_connection_tx_clone.clone();
+                        Handle::current()
+                            .spawn_blocking(move || {
+                                out_connection_tx_clone
+                                    .send((res, ip_addr))
+                                    .expect("Failed to send out-connection message to network worker.");
+                            })
+                            .await
+                            .expect("Failed to run task to send out-connection message to network worker.");
+                    }
+                }));
             }
-            
+
             select! {
                 // listen to manager commands
                 recv(self.controller_manager_rx) -> cmd => {
@@ -155,6 +190,23 @@ impl NetworkWorker {
                     }
                 },
 
+                // Out-connections
+                recv(out_connection_rx) -> conn => {
+                    match conn {
+                        Err(_) => {
+                            // Future set empty, re-try
+                            need_connect_retry = true
+                        },
+                        Ok((res, ip_addr)) => {
+                            self.manage_out_connections(
+                                res,
+                                ip_addr,
+                                &mut cur_connection_id,
+                            );
+                        }
+                    }
+                },
+
                 // wake up interval
                 recv(wakeup_interval) -> _ => {
                     self.peer_info_db.update()?; // notify tick to peer db
@@ -162,6 +214,10 @@ impl NetworkWorker {
                     need_connect_retry = true; // retry out connections
                 },
             }
+        }
+
+        if let Some(handle) = out_connection_handle {
+            handle.abort();
         }
         Ok(())
     }
@@ -396,7 +452,7 @@ impl NetworkWorker {
     /// * `res`: `(reader, writer)` in a result coming out of `out_connecting_futures`
     /// * `ip_addr`: distant address we are trying to reach.
     /// * `cur_connection_id`: connection id of the node we are trying to reach
-    async fn manage_out_connections(
+    fn manage_out_connections(
         &mut self,
         res: tokio::io::Result<(ReadHalf, WriteHalf)>,
         ip_addr: IpAddr,
