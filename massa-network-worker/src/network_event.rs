@@ -27,7 +27,7 @@ impl EventSender {
         }
     }
 
-    pub async fn send(&self, event: NetworkEvent) -> Result<(), NetworkError> {
+    pub fn send(&self, event: NetworkEvent) -> Result<(), NetworkError> {
         let result = self
             .controller_event_tx
             .send_timeout(event, self.max_send_wait);
@@ -47,7 +47,7 @@ impl EventSender {
     }
 
     /// Forward a message to a node worker. If it fails, notify upstream about connection closure.
-    pub async fn forward(
+    pub fn forward(
         &self,
         node_id: NodeId,
         node: Option<&(ConnectionId, Sender<NodeCommand>)>,
@@ -63,7 +63,7 @@ impl EventSender {
         } else {
             // We probably weren't able to send this event previously,
             // retry it now.
-            let _ = self.send(NetworkEvent::ConnectionClosed(node_id)).await;
+            let _ = self.send(NetworkEvent::ConnectionClosed(node_id));
         }
     }
 
@@ -111,7 +111,7 @@ pub mod event_impl {
         Ok(())
     }
 
-    pub async fn on_received_ask_for_blocks(
+    pub fn on_received_ask_for_blocks(
         worker: &mut NetworkWorker,
         from: NodeId,
         list: Vec<(BlockId, AskForBlocksInfo)>,
@@ -119,13 +119,12 @@ pub mod event_impl {
         if let Err(err) = worker
             .event
             .send(NetworkEvent::AskedForBlocks { node: from, list })
-            .await
         {
             evt_failed!(err)
         }
     }
 
-    pub async fn on_received_block_header(
+    pub fn on_received_block_header(
         worker: &mut NetworkWorker,
         from: NodeId,
         header: WrappedHeader,
@@ -134,20 +133,16 @@ pub mod event_impl {
             "network_worker.on_node_event receive NetworkEvent::ReceivedBlockHeader",
             {"hash": header.id.get_hash(), "header": header, "node": from}
         );
-        if let Err(err) = worker
-            .event
-            .send(NetworkEvent::ReceivedBlockHeader {
-                source_node_id: from,
-                header,
-            })
-            .await
-        {
+        if let Err(err) = worker.event.send(NetworkEvent::ReceivedBlockHeader {
+            source_node_id: from,
+            header,
+        }) {
             evt_failed!(err)
         }
         Ok(())
     }
 
-    pub async fn on_received_block_info(
+    pub fn on_received_block_info(
         worker: &mut NetworkWorker,
         from: NodeId,
         info: Vec<(BlockId, BlockInfoReply)>,
@@ -155,14 +150,13 @@ pub mod event_impl {
         if let Err(err) = worker
             .event
             .send(NetworkEvent::ReceivedBlockInfo { node: from, info })
-            .await
         {
             evt_failed!(err)
         }
         Ok(())
     }
 
-    pub async fn on_asked_peer_list(
+    pub fn on_asked_peer_list(
         worker: &mut NetworkWorker,
         from: NodeId,
     ) -> Result<(), NetworkError> {
@@ -192,7 +186,7 @@ pub mod event_impl {
     ///
     /// Forward the event by sending a `[NetworkEvent::ReceivedOperations]`.
     /// See also `[massa_network_exports::NodeEventType::ReceivedOperations]`
-    pub async fn on_received_operations(
+    pub fn on_received_operations(
         worker: &mut NetworkWorker,
         from: NodeId,
         operations: Vec<WrappedOperation>,
@@ -201,21 +195,17 @@ pub mod event_impl {
             "network_worker.on_node_event receive NetworkEvent::ReceivedOperations",
             { "operations": operations }
         );
-        if let Err(err) = worker
-            .event
-            .send(NetworkEvent::ReceivedOperations {
-                node: from,
-                operations,
-            })
-            .await
-        {
+        if let Err(err) = worker.event.send(NetworkEvent::ReceivedOperations {
+            node: from,
+            operations,
+        }) {
             evt_failed!(err)
         }
     }
 
     /// The node worker signal that he received a batch of operation ids
     /// from another node.
-    pub async fn on_received_operations_annoncement(
+    pub fn on_received_operations_annoncement(
         worker: &mut NetworkWorker,
         from: NodeId,
         operation_prefix_ids: OperationPrefixIds,
@@ -230,7 +220,6 @@ pub mod event_impl {
                 node: from,
                 operation_prefix_ids,
             })
-            .await
         {
             evt_failed!(err)
         }
@@ -238,7 +227,7 @@ pub mod event_impl {
 
     /// The node worker signal that he received a list of operations required
     /// from another node.
-    pub async fn on_received_ask_for_operations(
+    pub fn on_received_ask_for_operations(
         worker: &mut NetworkWorker,
         from: NodeId,
         operation_prefix_ids: OperationPrefixIds,
@@ -247,19 +236,15 @@ pub mod event_impl {
             "network_worker.on_node_event receive NetworkEvent::ReceiveAskForOperations",
             { "operations": operation_prefix_ids }
         );
-        if let Err(err) = worker
-            .event
-            .send(NetworkEvent::ReceiveAskForOperations {
-                node: from,
-                operation_prefix_ids,
-            })
-            .await
-        {
+        if let Err(err) = worker.event.send(NetworkEvent::ReceiveAskForOperations {
+            node: from,
+            operation_prefix_ids,
+        }) {
             evt_failed!(err)
         }
     }
 
-    pub async fn on_received_endorsements(
+    pub fn on_received_endorsements(
         worker: &mut NetworkWorker,
         from: NodeId,
         endorsements: Vec<WrappedEndorsement>,
@@ -268,14 +253,10 @@ pub mod event_impl {
             "network_worker.on_node_event receive NetworkEvent::ReceivedEndorsements",
             { "endorsements": endorsements }
         );
-        if let Err(err) = worker
-            .event
-            .send(NetworkEvent::ReceivedEndorsements {
-                node: from,
-                endorsements,
-            })
-            .await
-        {
+        if let Err(err) = worker.event.send(NetworkEvent::ReceivedEndorsements {
+            node: from,
+            endorsements,
+        }) {
             evt_failed!(err)
         }
     }

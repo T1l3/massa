@@ -272,10 +272,7 @@ impl NetworkWorker {
                         });
                         entry.insert((new_connection_id, node_command_tx.clone()));
 
-                        let res = self
-                            .event
-                            .send(NetworkEvent::NewConnection(new_node_id))
-                            .await;
+                        let res = self.event.send(NetworkEvent::NewConnection(new_node_id));
 
                         // If we failed to send the event to protocol, close the connection.
                         if res.is_err() {}
@@ -601,28 +598,28 @@ impl NetworkWorker {
                 event_impl::on_received_peer_list(self, from_node_id, &lst)?
             }
             NodeEvent(from_node_id, NodeEventType::ReceivedAskForBlocks(list)) => {
-                event_impl::on_received_ask_for_blocks(self, from_node_id, list).await
+                event_impl::on_received_ask_for_blocks(self, from_node_id, list)
             }
             NodeEvent(from_node_id, NodeEventType::ReceivedReplyForBlocks(list)) => {
-                event_impl::on_received_block_info(self, from_node_id, list).await?
+                event_impl::on_received_block_info(self, from_node_id, list)?
             }
             NodeEvent(source_node_id, NodeEventType::ReceivedBlockHeader(header)) => {
-                event_impl::on_received_block_header(self, source_node_id, header).await?
+                event_impl::on_received_block_header(self, source_node_id, header)?
             }
             NodeEvent(from_node_id, NodeEventType::AskedPeerList) => {
-                event_impl::on_asked_peer_list(self, from_node_id).await?
+                event_impl::on_asked_peer_list(self, from_node_id)?
             }
             NodeEvent(node, NodeEventType::ReceivedOperations(operations)) => {
-                event_impl::on_received_operations(self, node, operations).await
+                event_impl::on_received_operations(self, node, operations)
             }
             NodeEvent(node, NodeEventType::ReceivedEndorsements(endorsements)) => {
-                event_impl::on_received_endorsements(self, node, endorsements).await
+                event_impl::on_received_endorsements(self, node, endorsements)
             }
             NodeEvent(node, NodeEventType::ReceivedOperationAnnouncements(operation_ids)) => {
-                event_impl::on_received_operations_annoncement(self, node, operation_ids).await
+                event_impl::on_received_operations_annoncement(self, node, operation_ids)
             }
             NodeEvent(node, NodeEventType::ReceivedAskForOperations(operation_ids)) => {
-                event_impl::on_received_ask_for_operations(self, node, operation_ids).await
+                event_impl::on_received_ask_for_operations(self, node, operation_ids)
             }
         }
         Ok(())
