@@ -256,8 +256,7 @@ impl NetworkWorker {
                         "connection_id": new_connection_id,
                         "node_id": new_node_id
                     });
-                    self.connection_closed(new_connection_id, ConnectionClosureReason::Normal)
-                        .await?;
+                    self.connection_closed(new_connection_id, ConnectionClosureReason::Normal)?;
                     return Ok(());
                 }
 
@@ -272,8 +271,7 @@ impl NetworkWorker {
                             "connection_id": new_connection_id,
                             "node_id": new_node_id
                         });
-                        self.connection_closed(new_connection_id, ConnectionClosureReason::Normal)
-                            .await?;
+                        self.connection_closed(new_connection_id, ConnectionClosureReason::Normal)?;
                     }
                     // we don't have this node ID
                     hash_map::Entry::Vacant(entry) => {
@@ -328,8 +326,7 @@ impl NetworkWorker {
                 // has failed and merge new `to_add` candidates.
                 self.peer_info_db.merge_candidate_peers(&peers)?;
                 self.running_handshakes.remove(&new_connection_id);
-                self.connection_closed(new_connection_id, ConnectionClosureReason::Failed)
-                    .await?;
+                self.connection_closed(new_connection_id, ConnectionClosureReason::Failed)?;
             }
             // a handshake finished and failed
             Err(err) => {
@@ -342,14 +339,13 @@ impl NetworkWorker {
                     "err": err.to_string()
                 });
                 self.running_handshakes.remove(&new_connection_id);
-                self.connection_closed(new_connection_id, ConnectionClosureReason::Failed)
-                    .await?;
+                self.connection_closed(new_connection_id, ConnectionClosureReason::Failed)?;
             }
         };
         Ok(())
     }
 
-    async fn connection_closed(
+    fn connection_closed(
         &mut self,
         id: ConnectionId,
         reason: ConnectionClosureReason,
