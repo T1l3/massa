@@ -172,6 +172,7 @@ impl NetworkWorker {
                             .expect("Failed to run task to send out-connection message to network worker.");
                     }
                 }));
+                need_connect_retry = false;
             }
 
             select! {
