@@ -130,18 +130,21 @@ impl NetworkWorker {
     /// Runs the main loop of the network worker
     /// There is a `tokio::select!` inside the loop
     pub fn run_loop(mut self) -> Result<(), NetworkError> {
-        // wake up the controller at a regular interval to retry connections
-        let mut wakeup_interval = tick(self.cfg.wakeup_interval.to_duration());
-        let mut need_connect_retry = true;
         let mut out_connection_handle = None;
-        let (out_connection_tx, out_connection_rx) = bounded::<(
-            tokio::io::Result<(ReadHalf, WriteHalf)>,
-            IpAddr,
-        )>(self.cfg.node_command_channel_size); // TODO: config
+        let mut out_connection_rx = None;
         let mut cur_connection_id = ConnectionId::default();
 
         loop {
-            if need_connect_retry {
+            if out_connection_rx.is_none() {
+                // Scope the channel creation to here,
+                // to ensure all senders drop when the futureset is empty.
+                let (out_connection_tx, rx) = bounded::<(
+                    tokio::io::Result<(ReadHalf, WriteHalf)>,
+                    IpAddr,
+                )>(self.cfg.node_command_channel_size); // TODO: config
+                
+                out_connection_rx = Some(rx);
+                
                 // try to connect to candidate IPs
                 let mut out_connecting_futures = FuturesUnordered::new();
                 let candidate_ips = self.peer_info_db.get_out_connection_candidate_ips()?;
@@ -172,7 +175,6 @@ impl NetworkWorker {
                             .expect("Failed to run task to send out-connection message to network worker.");
                     }
                 }));
-                need_connect_retry = false;
             }
 
             select! {
@@ -192,27 +194,22 @@ impl NetworkWorker {
                 },
 
                 // Out-connections
-                recv(out_connection_rx) -> conn => {
+                // `out_connection_rx` is always Some(rx) here.
+                recv(out_connection_rx.as_ref().expect("No out_connection_rx.")) -> conn => {
                     match conn {
                         Err(_) => {
                             // Future set empty, re-try
-                            need_connect_retry = true
+                            out_connection_rx = None;
+                            self.peer_info_db.update()?; // notify tick to peer db
                         },
                         Ok((res, ip_addr)) => {
                             self.manage_out_connections(
                                 res,
                                 ip_addr,
                                 &mut cur_connection_id,
-                            );
+                            )?;
                         }
                     }
-                },
-
-                // wake up interval
-                recv(wakeup_interval) -> _ => {
-                    self.peer_info_db.update()?; // notify tick to peer db
-
-                    need_connect_retry = true; // retry out connections
                 },
             }
         }
