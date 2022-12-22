@@ -315,7 +315,17 @@ impl NetworkWorker {
                         let res = self.event.send(NetworkEvent::NewConnection(new_node_id));
 
                         // If we failed to send the event to protocol, close the connection.
-                        if res.is_err() {}
+                        if res.is_err() {
+                            let res = node_command_tx
+                                .send(NodeCommand::Close(ConnectionClosureReason::Normal));
+                            if res.is_err() {
+                                massa_trace!(
+                                    "network.network_worker.on_handshake_finished", {"err": NetworkError::ChannelError(
+                                        "close node command send failed".into(),
+                                    ).to_string()}
+                                );
+                            }
+                        }
                     }
                 }
             }
