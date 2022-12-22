@@ -8,6 +8,7 @@ use super::{
     binders::{ReadBinder, WriteBinder},
     messages::Message,
 };
+use crossbeam_channel::{bounded, select, tick, Receiver, Sender};
 use futures::future::try_join;
 use massa_hash::Hash;
 use massa_logging::massa_trace;
@@ -31,11 +32,23 @@ use massa_network_exports::{
 use massa_signature::KeyPair;
 use massa_time::MassaTime;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
-use tokio::{task::JoinHandle, time::timeout};
+use std::thread::{self, JoinHandle};
+use tokio::runtime::Handle;
+use tokio::{task::JoinHandle as AsyncJoinHandle, time::timeout};
 use tracing::debug;
 
 /// Type alias for more readability
 pub type HandshakeReturnType = Result<(NodeId, ReadBinder, WriteBinder), NetworkError>;
+
+pub fn start_handshake_manager(
+    connection_sender: Sender<(ConnectionId, HandshakeReturnType)>,
+    runtime_handle: Handle,
+) -> (Sender<HandshakeWorker>, JoinHandle<()>) {
+    // TODO: config size.
+    let (worker_tx, worker_rx) = bounded::<HandshakeWorker>(1);
+    let join_handle = thread::spawn(move || {});
+    (worker_tx, join_handle)
+}
 
 /// Manages handshakes.
 pub struct HandshakeWorker {
@@ -80,7 +93,7 @@ impl HandshakeWorker {
         connection_id: ConnectionId,
         max_bytes_read: f64,
         max_bytes_write: f64,
-    ) -> JoinHandle<(ConnectionId, HandshakeReturnType)> {
+    ) -> AsyncJoinHandle<(ConnectionId, HandshakeReturnType)> {
         debug!("starting handshake with connection_id={}", connection_id);
         massa_trace!("network_worker.new_connection", {
             "connection_id": connection_id

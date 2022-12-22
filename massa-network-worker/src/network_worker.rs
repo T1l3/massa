@@ -142,9 +142,9 @@ impl NetworkWorker {
                     tokio::io::Result<(ReadHalf, WriteHalf)>,
                     IpAddr,
                 )>(self.cfg.node_command_channel_size); // TODO: config
-                
+
                 out_connection_rx = Some(rx);
-                
+
                 // try to connect to candidate IPs
                 let mut out_connecting_futures = FuturesUnordered::new();
                 let candidate_ips = self.peer_info_db.get_out_connection_candidate_ips()?;
